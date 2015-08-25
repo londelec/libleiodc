@@ -2,11 +2,16 @@
  ============================================================================
  Name        : libleiodchw.c
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
- Description : LEIODC processor pin control and serial interface configure library
+ Description : LEIODC processor pin control and serial interface configuration library
 
   Change log  :
+
+  *********V1.01 02/07/2015**************
+  Library initialization constructor function created
+  Set pin to input function created
+  gpio direction and value file 0666 permission setting function created
 
   *********V1.00 05/03/2015**************
   Initial revision
@@ -30,7 +35,7 @@
 
 
 #define	LIBVERSION_MAJOR		1			// Library version number major
-#define	LIBVERSION_MINOR		0			// Library version number minor
+#define	LIBVERSION_MINOR		1			// Library version number minor
 #if LIBVERSION_MINOR < 10
 #define	LIBVERSION_10TH_ZERO	"0"
 #else
@@ -66,8 +71,11 @@ const lechar *libleiodcVersion = " libleiodcVersion="\
 
 
 uint16_t LibRevNumber = (LIBVERSION_MAJOR * 100) + LIBVERSION_MINOR;
-lechar LibErrorString[ERRORSTR_LENGTH];
+lechar LibErrorString[ERRORSTR_LENGTH] = {
+		"libleiodc: \0",
+};
 lechar *StdErrorPtr;
+lechar *ErrStringptr = LibErrorString;
 
 
 const lechar *gpiorootdir = GPIO_ROOT_DIR;
@@ -76,22 +84,24 @@ const lechar *gpioexport = GPIO_ROOT_DIR GPIO_EXPORT;
 const lechar *gpiodirection = GPIO_DIRECTION;
 const lechar *gpiovalue = GPIO_VALUE;
 //const lechar *gpioout = GPIO_OUT;
-//const lechar *gpioin = GPIO_IN;
+const lechar *gpioin = GPIO_IN;
 const lechar *gpiohigh = GPIO_HIGH;
 const lechar *gpiolow = GPIO_LOW;
 
 
 // Error message constants
 const lechar *slogErrdel = ": ";
-const lechar *slogopenerr = "'%s' file open() error";
-const lechar *slogwriteerr = "'%s' file write() error";
-const lechar *slogcloseerr = "'%s' file close() error";
+const lechar *slogopenerr = "%s open() error";
+const lechar *slogwriteerr = "%s write() error";
+const lechar *slogcloseerr = "%s close() error";
+const lechar *slogchmoderr = "%s chmod() error";
+const lechar *slogstaterr = "%s stat() error";
 const lechar *slogdirnotfound = "Error directory %s is not found";
 const lechar *slogflnotfound = "Error file %s is not found";
 const lechar *sloggpionotcreated = "Error gpio export failed, directory %s is not created";
 
 const lechar *sloginvalidpin = "Processor gpio pad is not mapped for the requested lepin enum %u";
-const lechar *sloglibold = "libleiodc.so library is too old version %.2f or newer is required. (current version %.2f)";
+const lechar *sloglibold = "libleiodc.so library version %.2f is too old, version %.2f or newer is required.";
 const lechar *sloginvaliduart = "UART number '%u' is to high, must be between 0...2";
 const lechar *slogioctlerr = "UART ioctl(%u, 0x%x, rs485.flags=0x%x rs485.padding[0]=%u) error";
 
@@ -129,9 +139,21 @@ const pinmapTblStr pinmapTable[] = {
 
 
 /***************************************************************************
+* Library initialization constructor
+* [03/07/2015]
+***************************************************************************/
+void LELIBCONSTRUCTOR leiodc_init(void) {
+
+	ErrStringptr = LibErrorString + strlen(LibErrorString);
+}
+
+
+/***************************************************************************
 * Initialize required pins
 * return failure if initialization failed
 * [11/03/2015]
+* File permission setting added
+* [09/07/2015]
 ***************************************************************************/
 uint8_t leiodc_pininit(LIBARGDEF_INIT) {
 	lechar					gpiopath[GPIO_PATH_LENGTH];
@@ -144,7 +166,7 @@ uint8_t leiodc_pininit(LIBARGDEF_INIT) {
 
 	if (access(gpiorootdir, X_OK) != 0) {		// Root directory must exist
 		StdErrorPtr = strerror(errno);			// Capture error if any
-		sprintf(LibErrorString, slogdirnotfound, gpiorootdir);
+		sprintf(ErrStringptr, slogdirnotfound, gpiorootdir);
 		SYSLOG_STDERR
 		return EXIT_FAILURE;
 	}
@@ -164,9 +186,9 @@ uint8_t leiodc_pininit(LIBARGDEF_INIT) {
 			mxpad = _reslovepad(cnt);			// Actual MX gpio number is calculated based on counter
 		if (!mxpad) {
 			if (pintable)						// If table argument is passed
-				sprintf(LibErrorString, sloginvalidpin, pintable[cnt]);
+				sprintf(ErrStringptr, sloginvalidpin, pintable[cnt]);
 			else
-				sprintf(LibErrorString, sloginvalidpin, cnt);
+				sprintf(ErrStringptr, sloginvalidpin, cnt);
 			return EXIT_FAILURE;
 		}
 
@@ -178,10 +200,20 @@ uint8_t leiodc_pininit(LIBARGDEF_INIT) {
 				goto stopnow;
 			}
 			if (access(gpiopath, X_OK) != 0) {			// Check if gpio directory created
-				sprintf(LibErrorString, sloggpionotcreated, gpiopath);
+				sprintf(ErrStringptr, sloggpionotcreated, gpiopath);
 				erroccurred = 1;
 				goto stopnow;
 			}
+		}
+		sprintf(&gpiopath[dirconstlen], "%u%s", mxpad, gpiodirection);	// Set direction file permissions
+		if (_setperms(gpiopath) == EXIT_FAILURE) {
+			erroccurred = 1;
+			goto stopnow;
+		}
+		sprintf(&gpiopath[dirconstlen], "%u%s", mxpad, gpiovalue);		// Set value file permissions
+		if (_setperms(gpiopath) == EXIT_FAILURE) {
+			erroccurred = 1;
+			goto stopnow;
 		}
 	}
 
@@ -226,6 +258,18 @@ EXPORT_SYMBOL(leiodc_pinstate)
 
 
 /***************************************************************************
+* Make pin input
+* return failure if failed
+* [02/07/2015]
+***************************************************************************/
+uint8_t leiodc_pininput(LIBARGDEF_PINS) {
+
+	return _gpioaction(lepin, gpiodirection, gpioin);
+}
+EXPORT_SYMBOL(leiodc_pininput)
+
+
+/***************************************************************************
 * Set interface mode of the UART
 * return failure if failed
 * [14/04/2015]
@@ -235,9 +279,9 @@ uint8_t leiodc_uartint(LIBARGDEF_UART) {
 
 
 	if (uartno > 2) {
-		//sprintf(LibErrorString, sloginvaliduart, uartno);
+		//sprintf(ErrStringptr, sloginvaliduart, uartno);
 		//return EXIT_FAILURE;
-		return EXIT_SUCCESS;		// Don't do anything if UART number argument is grater than 2
+		return EXIT_SUCCESS;		// Don't do anything if UART number argument is greater than 2
 	}
 	if (leiodc_pininit(NULL, lepin_count) == EXIT_FAILURE) return EXIT_FAILURE;
 
@@ -300,7 +344,7 @@ uint8_t leiodc_uartint(LIBARGDEF_UART) {
 		if (fdptr) {
 			if (ioctl(*fdptr, TIOCSRS485, &rs485kernel)) {
 				StdErrorPtr = strerror(errno);
-				sprintf(LibErrorString, slogioctlerr, *fdptr, TIOCSRS485, rs485kernel.flags, rs485kernel.padding[0]);
+				sprintf(ErrStringptr, slogioctlerr, *fdptr, TIOCSRS485, rs485kernel.flags, rs485kernel.padding[0]);
 				SYSLOG_STDERR
 				return EXIT_FAILURE;
 			}
@@ -342,7 +386,7 @@ uint8_t leiodc_uartint(LIBARGDEF_UART) {
 		if (fdptr) {
 			if (ioctl(*fdptr, TIOCSRS485, &rs485kernel)) {
 				StdErrorPtr = strerror(errno);
-				sprintf(LibErrorString, slogioctlerr, *fdptr, TIOCSRS485, rs485kernel.flags, rs485kernel.padding[0]);
+				sprintf(ErrStringptr, slogioctlerr, *fdptr, TIOCSRS485, rs485kernel.flags, rs485kernel.padding[0]);
 				SYSLOG_STDERR
 				return EXIT_FAILURE;
 			}
@@ -454,7 +498,7 @@ uint8_t leiodc_libverchk(LIBARGDEF_VERCHK) {
 		float		currentver = LibRevNumber;
 		reqver /= 100;
 		currentver /= 100;
-		sprintf(LibErrorString, sloglibold, reqver, currentver);
+		sprintf(ErrStringptr, sloglibold, currentver, reqver);
 		return EXIT_FAILURE;
 	}
 	return EXIT_SUCCESS;
@@ -478,7 +522,7 @@ uint8_t _gpioaction(leiodcpin lepin, const lechar *pathpostfix, const lechar *st
 
 	mxpad = _reslovepad(lepin);	// This is actual MX gpio number
 	if (!mxpad) {
-		sprintf(LibErrorString, sloginvalidpin, lepin);
+		sprintf(ErrStringptr, sloginvalidpin, lepin);
 		return EXIT_FAILURE;
 	}
 
@@ -489,7 +533,7 @@ uint8_t _gpioaction(leiodcpin lepin, const lechar *pathpostfix, const lechar *st
 
 
 	if (access(gpiopath, W_OK) != 0) {				// Check if file name is writable
-		sprintf(LibErrorString, slogflnotfound, gpiopath);
+		sprintf(ErrStringptr, slogflnotfound, gpiopath);
 		return EXIT_FAILURE;
 	}
 	return _writegpiofile(&tmpfd, (lechar *) gpiopath, (lechar *) statestring, 1);
@@ -508,7 +552,7 @@ uint8_t _writegpiofile(fddef *filefd, lechar *filename, lechar *wrstring, uint8_
 		*filefd = open(filename, O_WRONLY);
 		StdErrorPtr = strerror(errno);			// Capture error if any
 		if (*filefd < 1) {
-			sprintf(LibErrorString, slogopenerr, filename);
+			sprintf(ErrStringptr, slogopenerr, filename);
 			SYSLOG_STDERR
 			*filefd = 0;
 			return EXIT_FAILURE;
@@ -518,7 +562,7 @@ uint8_t _writegpiofile(fddef *filefd, lechar *filename, lechar *wrstring, uint8_
 
 	if (write(*filefd, wrstring, strlen(wrstring)) < 0) {
 		StdErrorPtr = strerror(errno);			// Capture error if any
-		sprintf(LibErrorString, slogwriteerr, filename);
+		sprintf(ErrStringptr, slogwriteerr, filename);
 		SYSLOG_STDERR
 		erroccurred = 1;
 	}
@@ -542,7 +586,7 @@ uint8_t _close(fddef *filefd, lechar *filename, uint8_t erralready) {
 	if (close(*filefd)) {
 		if (!erralready) {
 			StdErrorPtr = strerror(errno);		// Capture error if any
-			sprintf(LibErrorString, slogcloseerr, filename);
+			sprintf(ErrStringptr, slogcloseerr, filename);
 			SYSLOG_STDERR
 		}
 		return EXIT_FAILURE;
@@ -554,18 +598,47 @@ uint8_t _close(fddef *filefd, lechar *filename, uint8_t erralready) {
 
 
 /***************************************************************************
-* Log error messages
+* Resolve MX28 pad number from the table
 * [05/03/2015]
 ***************************************************************************/
 mx28padenum _reslovepad(leiodcpinenum lepin) {
 	leiodcpin	cnt;
 
 
-	for (cnt = 0; cnt < (sizeof(pinmapTable) / sizeof(pinmapTblStr)); cnt++) {
+	for (cnt = 0; cnt < (ARRAY_SIZE(pinmapTable)); cnt++) {
 		if (pinmapTable[cnt].lepin == lepin)
 			return pinmapTable[cnt].cpupad;
 	}
 	return 0;
+}
+
+
+/***************************************************************************
+* Check and set file permissions
+* [09/07/2015]
+***************************************************************************/
+uint8_t _setperms(lechar *filepath) {
+	struct stat 	filestat;
+	mode_t			fileperms = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP |  S_IROTH | S_IWOTH;
+
+
+	if (stat(filepath, &filestat) < 0) {			// Check if file exists and read permissions
+		StdErrorPtr = strerror(errno);				// Capture error if any
+		sprintf(ErrStringptr, slogstaterr, filepath);
+		SYSLOG_STDERR
+		return EXIT_FAILURE;
+	}
+	else {
+		if ((filestat.st_mode & fileperms) != fileperms) {	// Different permissions required
+			if (chmod(filepath, fileperms) < 0) {			// Set new permissions
+				StdErrorPtr = strerror(errno);		// Capture error if any
+				sprintf(ErrStringptr, slogchmoderr, filepath);
+				SYSLOG_STDERR
+				return EXIT_FAILURE;
+			}
+		}
+	}
+	return EXIT_SUCCESS;
 }
 
 
@@ -576,7 +649,7 @@ mx28padenum _reslovepad(leiodcpinenum lepin) {
 void _stderrappend(lechar *errptr) {
 
 	if (errptr) {
-		strcat(LibErrorString, slogErrdel);
-		strcat(LibErrorString, errptr);
+		strcat(ErrStringptr, slogErrdel);
+		strcat(ErrStringptr, errptr);
 	}
 }

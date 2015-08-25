@@ -2,11 +2,15 @@
  ============================================================================
  Name        : libleiodchw.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for LEIODC processor pin manipulation library
 
   Change log  :
+
+  *********V1.01 02/07/2015**************
+  Set pin to input function created
+  File permission setting function created
 
   *********V1.00 05/03/2015**************
   Initial revision
@@ -55,6 +59,8 @@ typedef	uint8_t						leiodcpin;				/* LEIODC pin size definition */
 
 
 // Pin definitions used by library function callers
+// Warning, don't remove existing enums as this will break
+// binaries which call library with previous enums
 typedef enum {
 	lepin_COM1_RS232				= 1,				// COM1 RS232 enabled = 1
 	lepin_COM1_RS422_RX1,								// COM1 1st RS485 (U11) RX enabled = 0
@@ -75,7 +81,7 @@ typedef enum {
 	lepin_COM3_RS422_TX2,								// COM3 2nd RS485 (U18) TX enabled = 1
 
 	lepin_heartbeat,									// Heartbeat
-	lepin_modem_reset,									// MU609 reset
+	lepin_modem_reset,									// MU609 reset (no longer used)
 	lepin_modem_power,									// MU609 power
 	lepin_count											// Number of defined pins, must be the last enum
 } LEOPACK leiodcpinenum;
@@ -102,7 +108,7 @@ typedef enum {
 	mx28pad_LCD_D16__GPIO_1_16		= 48,				// COM3 2nd RS485 (U18) TX enabled = 1
 
 	mx28pad_SSP3_MISO__GPIO_2_26	= 90,				// Heartbeat
-	mx28pad_SAIF1_SDATA0__GPIO_3_26	= 122,				// MU609 reset
+	mx28pad_SAIF1_SDATA0__GPIO_3_26	= 122,				// MU609 reset (no longer used)
 	mx28pad_PWM4__GPIO_3_29			= 125,				// MU609 power
 } LEOPACK mx28padenum;
 
@@ -150,6 +156,7 @@ extern lechar LibErrorString[];
 extern uint8_t leiodc_pininit(LIBARGDEF_INIT);
 extern uint8_t leiodc_pinoutstate(LIBARGDEF_PINS);
 extern uint8_t leiodc_pinstate(LIBARGDEF_PINS);
+extern uint8_t leiodc_pininput(LIBARGDEF_PINS);
 uint8_t leiodc_uartint(LIBARGDEF_UART);
 uint8_t leiodc_libverchk(LIBARGDEF_VERCHK);
 
@@ -159,6 +166,7 @@ uint8_t _gpioaction(leiodcpin lepin, const lechar *pathpostfix, const lechar *st
 uint8_t _writegpiofile(fddef *filefd, lechar *filename, lechar *wrstring, uint8_t closefl);
 uint8_t _close(fddef *filefd, lechar *filename, uint8_t erralready);
 mx28padenum _reslovepad(leiodcpinenum lepin);
+uint8_t _setperms(lechar *filepath);
 void _stderrappend(lechar *errptr);
 
 
