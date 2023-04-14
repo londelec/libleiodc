@@ -20,25 +20,38 @@ endif
 
 -include ../makefile.defs
 
+OPTIONAL_TOOL_DEPS := \
+$(wildcard ../makefile.defs) \
+$(wildcard ../makefile.init) \
+$(wildcard ../makefile.targets) \
+
+
+BUILD_ARTIFACT_NAME := libleiodc
+BUILD_ARTIFACT_EXTENSION := so.2.0.0
+BUILD_ARTIFACT_PREFIX :=
+BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME)$(if $(BUILD_ARTIFACT_EXTENSION),.$(BUILD_ARTIFACT_EXTENSION),)
+
 # Add inputs and outputs from these tool invocations to the build variables 
 
 # All Target
-all: libleiodc.so.1.0.0
+all: main-build
+
+# Main-build Target
+main-build: libleiodc.so.2.0.0
 
 # Tool invocations
-libleiodc.so.1.0.0: $(OBJS) $(USER_OBJS)
+libleiodc.so.2.0.0: $(OBJS) $(USER_OBJS) makefile objects.mk $(OPTIONAL_TOOL_DEPS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: Cross GCC Linker'
-	arm-linux-gnueabi-gcc -shared -o "libleiodc.so.1.0.0" $(OBJS) $(USER_OBJS) $(LIBS)
+	arm-br2-linux-gnueabi-gcc -shared -o "libleiodc.so.2.0.0" $(OBJS) $(USER_OBJS) $(LIBS)
 	@echo 'Finished building target: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(RM) $(OBJS)$(C_DEPS)$(LIBRARIES) libleiodc.so.1.0.0
+	-$(RM) $(LIBRARIES)$(OBJS)$(C_DEPS) libleiodc.so.2.0.0
 	-@echo ' '
 
-.PHONY: all clean dependents
-.SECONDARY:
+.PHONY: all clean dependents main-build
 
 -include ../makefile.targets
