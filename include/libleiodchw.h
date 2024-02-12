@@ -2,11 +2,16 @@
  ============================================================================
  Name        : libleiodchw.h
  Author      : AK
- Version     : V2.00
+ Version     : V3.00
  Copyright   : Property of Londelec UK Ltd
- Description : Header file for LEIODC processor pin manipulation library
+ Description : Header file for LEIODC CPU pin manipulation library
 
   Change log :
+
+  *********V3.00 26/01/2024**************
+  M.2 card config pins defined, new API to read card config as a byte
+  MB board version pins defined, new API to read Board version as a byte
+  All API functions renamed
 
   *********V2.00 31/10/2022**************
   Compatible with new GPIO interface in linux, now using /dev/gpio
@@ -66,8 +71,17 @@ typedef enum {
 	lepin_COM3_RS422_TX2,		/* COM3 2nd RS485_P34 TX enabled = 1 */
 
 	lepin_heartbeat,			/* Heartbeat LED */
-	lepin_modem_reset,			/* MU609 reset (no longer used) */
-	lepin_modem_power,			/* MU609 power */
+	lepin_modem_reset,			/* M.2 reset (no longer used for MU609 reset) */
+	lepin_modem_power,			/* M.2/MU609 power */
+	lepin_M2_cfg0,				/* M.2 CONFIG0 */
+	lepin_M2_cfg1,				/* M.2 CONFIG1 */
+	lepin_M2_cfg2,				/* M.2 CONFIG2 */
+	lepin_M2_cfg3,				/* M.2 CONFIG3 */
+
+	lepin_board_ver0,			/* Board version[0] */
+	lepin_board_ver1,			/* Board version[1] */
+	lepin_board_ver2,			/* Board version[2] */
+	lepin_board_ver3,			/* Board version[3] */
 	lepin_count					/* Number of defined pins, must be the last */
 } leiodcpin_e;
 
@@ -88,10 +102,14 @@ extern lechar LibErrorString[];
 /*
  * Exported functions
  */
-extern int leiodc_pininit(LIBARGDEF_INIT);
-extern int leiodc_pinoutstate(LIBARGDEF_PINS);
-extern int leiodc_pinstate(LIBARGDEF_PINS);
-extern int leiodc_pininput(LIBARGDEF_PINS);
-extern int leiodc_uartint(LIBARGDEF_UART);
+extern int leiodc_pin_init(LIBARGDEF_INIT);
+extern int leiodc_pin_dir_out_state_set(LIBARGDEF_PINS);
+extern int leiodc_pin_state_set(LIBARGDEF_PINS);
+extern int leiodc_pin_state_get(LIBARGDEF_PINS);
+extern int leiodc_pin_dir_in_set(LIBARGDEF_PINS);
+extern int leiodc_uart_int(LIBARGDEF_UART);
+extern int leiodc_m2_init(void);
+extern int leiodc_m2_config_get(void);
+extern int leiodc_board_ver_get(void);
 extern int leiodc_libverchk(LIBARGDEF_VERCHK);
 #endif /* LIBLEIODCHW_H_ */

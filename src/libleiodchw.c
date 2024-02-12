@@ -2,11 +2,16 @@
  ============================================================================
  Name        : libleiodchw.c
  Author      : AK
- Version     : V2.00
+ Version     : V3.00
  Copyright   : Property of Londelec UK Ltd
  Description : LEIODC CPU pin control and serial interface configuration library
 
   Change log :
+
+  *********V3.00 26/01/2024**************
+  M.2 card config pins defined, new API to read card config as a byte
+  MB board version pins defined, new API to read Board version as a byte
+  All API functions renamed
 
   *********V2.00 31/10/2022**************
   Compatible with new GPIO interface in linux, now using /dev/gpio
@@ -38,8 +43,8 @@
 #include "libleiodchw.h"
 
 
-#define	LIBVERSION_MAJOR		2			// Library version number major
-#define	LIBVERSION_MINOR		0			// Library version number minor
+#define	LIBVERSION_MAJOR		3
+#define	LIBVERSION_MINOR		0
 #if LIBVERSION_MINOR < 10
 #define	LIBVERSION_10TH_ZERO	"0"
 #else
@@ -54,13 +59,12 @@ const lechar *libleiodcVersion = " libleiodcVersion="\
 #include "builddate.txt"
 
 
-
 #ifdef GLOBAL_DEBUG
 //#define DEBUG_RS485_AS_232
 #define DEBUG_VERBOSE_CDEV_FD
 //#define DEBUG_ENABLE_HB_OUTPUT
 //#define DEBUG_LINUX_SERIAL
-#endif	// GLOBAL_DEBUG
+#endif
 
 /*
  * GPIO char dev constants
@@ -85,6 +89,9 @@ const lechar *libleiodcVersion = " libleiodcVersion="\
 	extern typeof(sym) sym;
 
 #define EXPORT_SYMBOL(sym)		__EXPORT_SYMBOL(sym, "")
+
+#define	RETVAL_OK			0
+#define	RETVAL_NEGATIVE		-1
 
 
 /*
@@ -113,7 +120,9 @@ static const lechar *gpiodirpref = GPIO_SYSFS_DIR GPIO_DIR_PREF;
 static const lechar *gpioexport = GPIO_SYSFS_DIR GPIO_EXPORT;
 static const lechar *gpiodirection = GPIO_DIRECTION;
 static const lechar *sloginvalidpin = "GPIO pad is not mapped for the requested lepin[%u]";
+static const lechar *sloghandle0 = "GPIO line handle '%s' is not initialized";
 static const lechar *sloginvalidmode = "Internal error GPIO access mode=%u is not implemented";
+static const lechar *slognogpiochip = "Upgrade kernel/OS in order to %s (" GPIO_CDEV_CHIP " not found)";
 lechar LibErrorString[512];
 
 
@@ -151,8 +160,16 @@ typedef enum {
 	mx28pad_LCD_D16__GPIO_1_16		= 48,				// COM3 2nd RS485_P[34] (U18) TX enabled = 1
 
 	mx28pad_SSP3_MISO__GPIO_2_26	= 90,				// Heartbeat
-	mx28pad_SAIF1_SDATA0__GPIO_3_26	= 122,				// MU609 reset (no longer used)
-	mx28pad_PWM4__GPIO_3_29			= 125,				// MU609 power
+	mx28pad_AUART3_CTS__GPIO_3_14	= 110,				// M.2 CONFIG0
+	mx28pad_AUART3_RTS__GPIO_3_15	= 111,				// M.2 CONFIG1
+	mx28pad_PWM2__GPIO_3_18			= 114,				// M.2 CONFIG2
+	mx28pad_SAIF0_MCLK__GPIO_3_20	= 116,				// Board Version[0]
+	mx28pad_SAIF0_LRCLK__GPIO_3_21	= 117,				// Board Version[1]
+	mx28pad_SAIF0_BITCLK__GPIO_3_22	= 118,				// Board Version[2]
+	mx28pad_SAIF0_SDATA0__GPIO_3_23	= 119,				// Board Version[3]
+	mx28pad_SAIF1_SDATA0__GPIO_3_26	= 122,				// M.2 reset (no longer used for MU609 reset)
+	mx28pad_PWM4__GPIO_3_29			= 125,				// M.2/MU609 power
+	mx28pad_LCD_RESET__GPIO_3_30	= 126,				// M.2 CONFIG3
 } cpupad_e;
 
 
@@ -176,8 +193,18 @@ static const cpupad_e PinMapTable[] = {
 	[lepin_COM3_RS422_TX2]	= mx28pad_LCD_D16__GPIO_1_16,
 
 	[lepin_heartbeat]		= mx28pad_SSP3_MISO__GPIO_2_26,
+
 	[lepin_modem_reset]		= mx28pad_SAIF1_SDATA0__GPIO_3_26,
 	[lepin_modem_power]		= mx28pad_PWM4__GPIO_3_29,
+	[lepin_M2_cfg0]			= mx28pad_AUART3_CTS__GPIO_3_14,
+	[lepin_M2_cfg1]			= mx28pad_AUART3_RTS__GPIO_3_15,
+	[lepin_M2_cfg2]			= mx28pad_PWM2__GPIO_3_18,
+	[lepin_M2_cfg3]			= mx28pad_LCD_RESET__GPIO_3_30,
+
+	[lepin_board_ver0]		= mx28pad_SAIF0_MCLK__GPIO_3_20,
+	[lepin_board_ver1]		= mx28pad_SAIF0_LRCLK__GPIO_3_21,
+	[lepin_board_ver2]		= mx28pad_SAIF0_BITCLK__GPIO_3_22,
+	[lepin_board_ver3]		= mx28pad_SAIF0_SDATA0__GPIO_3_23,
 };
 
 
@@ -223,7 +250,7 @@ struct handle_s {
 };
 static struct handle_s glrhandles[handle_count] = {
 	[handle_uart]		= {0, "uart-gpio", lepin_COM1_RS232, lepin_COM3_RS422_TX2},
-	[handle_modem]		= {0, "modem-gpio", lepin_modem_reset, lepin_modem_power},
+	[handle_modem]		= {0, "modem-gpio", lepin_modem_reset, lepin_M2_cfg3},
 	[handle_heartbeat]	= {0, "hb-gpio", lepin_heartbeat, lepin_heartbeat},
 };
 
@@ -313,7 +340,7 @@ static int _lib_mode(void) {
 		 * /dev/gpiochip0 found, using Linux CDEV API
 		 */
 		libmode = mode_cdev;
-		return EXIT_SUCCESS;
+		return RETVAL_OK;
 	}
 	cdeverr = strerror(errno);
 
@@ -322,12 +349,12 @@ static int _lib_mode(void) {
 		 * Legacy /sys/class/gpio/ found
 		 */
 		libmode = mode_sysfs;
-		return EXIT_SUCCESS;
+		return RETVAL_OK;
 	}
 	syserr = strerror(errno);
 
 	ERROR_LOGGER("'" GPIO_CDEV_CHIP "0' : %s; '" GPIO_SYSFS_DIR "' : %s", cdeverr, syserr)
-	return EXIT_FAILURE;
+	return RETVAL_NEGATIVE;
 }
 
 
@@ -346,7 +373,7 @@ static int _close(fddef *fdptr, const lechar *filename, int verbose) {
 	}
 	*fdptr = 0;
 
-	return (retstat) ? EXIT_FAILURE : EXIT_SUCCESS;
+	return (retstat) ? RETVAL_NEGATIVE : RETVAL_OK;
 }
 
 
@@ -355,7 +382,7 @@ static int _close(fddef *fdptr, const lechar *filename, int verbose) {
  * [05/03/2015]
  */
 static int _sysfile_write(fddef *fdptr, const lechar *filename, const lechar *wrstring, int closefl) {
-	int retstat = EXIT_SUCCESS;
+	int retstat = RETVAL_OK;
 
 
 	if (!(*fdptr)) {
@@ -363,18 +390,18 @@ static int _sysfile_write(fddef *fdptr, const lechar *filename, const lechar *wr
 		if (*fdptr < 1) {
 			ERROR_STD_LOGGER("open(%s)", filename)
 			*fdptr = 0;
-			return EXIT_FAILURE;
+			return RETVAL_NEGATIVE;
 		}
 	}
 
 	if (write(*fdptr, wrstring, strlen(wrstring)) < 0) {
 		ERROR_STD_LOGGER("write(%s)", filename)
-		retstat = EXIT_FAILURE;
+		retstat = RETVAL_NEGATIVE;
 	}
 
 	if (closefl) {
-		if (_close(fdptr, filename, BOOL_CHECK(retstat == EXIT_SUCCESS)) == EXIT_FAILURE)
-			retstat = EXIT_FAILURE;
+		if (_close(fdptr, filename, !retstat))
+			retstat = RETVAL_NEGATIVE;
 	}
 
 	return retstat;
@@ -395,7 +422,7 @@ static int _sysfs_action(leiodcpin lepin, const lechar *pathpostfix, const lecha
 	mxpad = _cpu_pad_get(lepin);	// This is CPU gpio number
 	if (!mxpad) {
 		ERROR_LOGGER(sloginvalidpin, lepin)
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	}
 
 	len = strlen(gpiodirpref);
@@ -406,23 +433,67 @@ static int _sysfs_action(leiodcpin lepin, const lechar *pathpostfix, const lecha
 
 	if (access(gpiopath, W_OK) != 0) {
 		ERROR_STD_LOGGER("Can't write '%s'", gpiopath)
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	}
 	return _sysfile_write(&tmpfd, gpiopath, statec, 1);
 }
 
 
 /*
- * ioctl() of the cdev GPIO line handle
+ * Find handle for current pin
+ * [12/02/2024]
+ */
+static struct handle_s *_cdev_pin_handle_find(leiodcpin lepin, int log) {
+	int 	i;
+	struct handle_s *handle = NULL;
+
+
+	for (i = 0; i < ARRAY_SIZE(glrhandles); i++) {
+		if ((lepin >= glrhandles[i].minp) && (lepin <= glrhandles[i].maxp)) {
+			handle = &glrhandles[i];
+			break;
+		}
+	}
+
+	if ((handle == NULL) && log) {
+		ERROR_LOGGER("GPIO line handle for lepin (%u) doesn't exist (contact support)", lepin)
+	}
+	return handle;
+}
+
+
+/*
+ * Get Values ioctl() of the cdev GPIO line handle
+ * [12/02/2024]
+ */
+static int _cdev_line_get_ioctl(struct handle_s *lrhandle, struct gpio_v2_line_values *linevals) {
+
+	if (!lrhandle->fd) {
+		ERROR_LOGGER(sloghandle0, lrhandle->name)
+		return RETVAL_NEGATIVE;
+	}
+
+	if (ioctl(lrhandle->fd, GPIO_V2_LINE_GET_VALUES_IOCTL, linevals)) {
+		ERROR_STD_LOGGER("GPIO ioctl(%s, %s)",
+				lrhandle->name, STRINGIFY_(GPIO_V2_LINE_GET_VALUES_IOCTL))
+		return RETVAL_NEGATIVE;
+	}
+
+	return RETVAL_OK;
+}
+
+
+/*
+ * Set Config ioctl() of the cdev GPIO line handle
  * [26/12/2022]
  */
-static int _cdev_line_ioctl(struct handle_s *lrhandle, __u32 pinmask, __u32 valmask, enum gpio_v2_line_flag gflag) {
+static int _cdev_line_set_ioctl(struct handle_s *lrhandle, __u32 pinmask, __u32 valmask, enum gpio_v2_line_flag gflag) {
 	struct gpio_v2_line_config linecfg;
 
 
 	if (!lrhandle->fd) {
-		ERROR_LOGGER("GPIO line handle is not initialized for '%s'", lrhandle->name)
-		return EXIT_FAILURE;
+		ERROR_LOGGER(sloghandle0, lrhandle->name)
+		return RETVAL_NEGATIVE;
 	}
 
 	memset(&linecfg, 0, sizeof(linecfg));
@@ -446,10 +517,10 @@ static int _cdev_line_ioctl(struct handle_s *lrhandle, __u32 pinmask, __u32 valm
 	if (ioctl(lrhandle->fd, GPIO_V2_LINE_SET_CONFIG_IOCTL, &linecfg)) {
 		ERROR_STD_LOGGER("GPIO ioctl(%s, %s)",
 				lrhandle->name, STRINGIFY_(GPIO_V2_LINE_SET_CONFIG_IOCTL))
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	}
 
-	return EXIT_SUCCESS;
+	return RETVAL_OK;
 }
 
 
@@ -459,24 +530,15 @@ static int _cdev_line_ioctl(struct handle_s *lrhandle, __u32 pinmask, __u32 valm
  */
 static int _cdev_action(leiodcpin lepin, int state, enum gpio_v2_line_flag gflag) {
 	__u32	pbit;
-	struct handle_s *handle = NULL;
-	int 	i;
+	struct handle_s *handle;
 
 
-	for (i = 0; i < ARRAY_SIZE(glrhandles); i++) {
-		if ((lepin >= glrhandles[i].minp) && (lepin <= glrhandles[i].maxp)) {
-			handle = &glrhandles[i];
-			break;
-		}
-	}
+	if ((handle = _cdev_pin_handle_find(lepin, 1)) == NULL)
+		return RETVAL_NEGATIVE;
 
-	if (!handle) {
-		ERROR_LOGGER("GPIO line handle for lepin (%u) doesn't exist (contact support)", lepin)
-		return EXIT_FAILURE;
-	}
 
 	pbit = 1 << (lepin - handle->minp);
-	return _cdev_line_ioctl(handle, pbit, state ? pbit : 0, gflag);
+	return _cdev_line_set_ioctl(handle, pbit, state ? pbit : 0, gflag);
 }
 
 
@@ -491,16 +553,16 @@ static int _permission_set(const lechar *filepath) {
 
 	if (stat(filepath, &fstat) < 0) {			// Check if file exists and read permissions
 		ERROR_STD_LOGGER("stat(%s)", filepath)
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	} else {
 		if ((fstat.st_mode & fperms) != fperms) {	// Different permissions required
 			if (chmod(filepath, fperms) < 0) {		// Set new permissions
 				ERROR_STD_LOGGER("chmod(%s)", filepath)
-				return EXIT_FAILURE;
+				return RETVAL_NEGATIVE;
 			}
 		}
 	}
-	return EXIT_SUCCESS;
+	return RETVAL_OK;
 }
 
 
@@ -514,24 +576,24 @@ static int _init_sysfs_file(lechar *gpiopath, cpupad_e cpupad, fddef *fdptr, int
 
 	sprintf(&gpiopath[dirlen], "%u", cpupad);	// Append gpio number to the directory string
 	if (access(gpiopath, X_OK) != 0) {			// Check if gpio directory already exists
-		if (_sysfile_write(fdptr, gpioexport, &gpiopath[dirlen], 0) == EXIT_FAILURE)
-			return EXIT_FAILURE;
+		if (_sysfile_write(fdptr, gpioexport, &gpiopath[dirlen], 0))
+			return RETVAL_NEGATIVE;
 
 		if (access(gpiopath, X_OK) != 0) {	// Check if gpio directory created
 			ERROR_STD_LOGGER("GPIO export failed to create '%s'", gpiopath)
-			return EXIT_FAILURE;
+			return RETVAL_NEGATIVE;
 		}
 	}
 
 	sprintf(&gpiopath[dirlen], "%u%s", cpupad, gpiodirection);	// Set direction file permissions
-	if (_permission_set(gpiopath) == EXIT_FAILURE)
-		return EXIT_FAILURE;
+	if (_permission_set(gpiopath))
+		return RETVAL_NEGATIVE;
 
 	sprintf(&gpiopath[dirlen], "%u%s", cpupad, GPIO_VALUE);		// Set value file permissions
-	if (_permission_set(gpiopath) == EXIT_FAILURE)
-		return EXIT_FAILURE;
+	if (_permission_set(gpiopath))
+		return RETVAL_NEGATIVE;
 
-	return EXIT_SUCCESS;
+	return RETVAL_OK;
 }
 
 
@@ -551,7 +613,7 @@ static int _init_cdev_chip(lechar *gpiopath, struct handle_s *lrhandle, int dirl
 	sprintf(&gpiopath[dirlen], "%u", chip);		// Append chip number to the directory string
 	if (access(gpiopath, R_OK) != 0) {			// Check if gpio chip exists
 		ERROR_STD_LOGGER("GPIO chip '%s' doesn't exist", gpiopath)
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	}
 
 
@@ -580,7 +642,7 @@ static int _init_cdev_chip(lechar *gpiopath, struct handle_s *lrhandle, int dirl
 	fd = open(gpiopath, O_RDONLY);
 	if (fd < 1) {
 		ERROR_STD_LOGGER("open(%s)", gpiopath)
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	}
 
 	if (ioctl(fd, GPIO_V2_GET_LINE_IOCTL, &linereq)) {
@@ -591,30 +653,30 @@ static int _init_cdev_chip(lechar *gpiopath, struct handle_s *lrhandle, int dirl
 		if (linereq.fd > 0)
 			lrhandle->fd = linereq.fd;
 		else {
-			ERROR_LOGGER("GPIO chip '%s' handle fd=%i", gpiopath, linereq.fd)
+			ERROR_LOGGER("GPIO chip '%s' handle open failed (fd %i)", gpiopath, linereq.fd)
 		}
 	}
 
 	_close(&fd, gpiopath, BOOL_CHECK(linereq.fd > 0));
 
 #ifdef DEBUG_VERBOSE_CDEV_FD
-	printf("DEBUG: %s handle fd=%i \n", lrhandle->name, linereq.fd);
+	printf("DEBUG: %s handle OK (fd %i)\n", lrhandle->name, linereq.fd);
 #endif
-	return (linereq.fd > 0) ? EXIT_SUCCESS : EXIT_FAILURE;
+	return (linereq.fd > 0) ? RETVAL_OK : RETVAL_NEGATIVE;
 }
 
 
 /*
  * Initialize required pins
- * return failure if initialization failed
+ * Return -1 on error
  * [11/03/2015]
  * File permission setting added
  * [09/07/2015]
  * Char device support added
  * [26/12/2022]
  */
-int leiodc_pininit(LIBARGDEF_INIT) {
-	int				i, h, retstat = EXIT_SUCCESS;
+int leiodc_pin_init(LIBARGDEF_INIT) {
+	int				i, h, retstat = RETVAL_OK;
 	lechar			gpiopath[GPIO_PATH_LENGTH];
 	size_t			len = 0;
 	leiodcpin		first = 0;
@@ -623,8 +685,8 @@ int leiodc_pininit(LIBARGDEF_INIT) {
 
 
 	if (!libmode) {
-		if (_lib_mode() == EXIT_FAILURE)
-			return EXIT_FAILURE;
+		if (_lib_mode())
+			return RETVAL_NEGATIVE;
 	}
 
 	switch (libmode) {
@@ -633,7 +695,7 @@ int leiodc_pininit(LIBARGDEF_INIT) {
 		strcpy(gpiopath, GPIO_CDEV_CHIP);
 		if (!pintable) {
 			ERROR_LOGGER("Can't initialize 'all' pins, need to pass pintable[] argument to %s()", __func__)
-			return EXIT_FAILURE;
+			return RETVAL_NEGATIVE;
 		}
 		break;
 
@@ -644,7 +706,7 @@ int leiodc_pininit(LIBARGDEF_INIT) {
 
 	default:
 		ERROR_LOGGER(sloginvalidmode, libmode)
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	}
 
 
@@ -663,9 +725,8 @@ int leiodc_pininit(LIBARGDEF_INIT) {
 			for (h = 0; h < ARRAY_SIZE(glrhandles); h++) {
 				if ((pintable[i] >= glrhandles[h].minp) && (pintable[i] <= glrhandles[h].maxp)) {
 					if (!glrhandles[h].fd) {
-						if (_init_cdev_chip(gpiopath, &glrhandles[h], len) == EXIT_FAILURE) {
-							return EXIT_FAILURE;
-						}
+						if (_init_cdev_chip(gpiopath, &glrhandles[h], len))
+							return RETVAL_NEGATIVE;
 					}
 					break;
 				}
@@ -681,12 +742,12 @@ int leiodc_pininit(LIBARGDEF_INIT) {
 
 			if (!cpupad) {
 				ERROR_LOGGER(sloginvalidpin, (pintable) ? pintable[i] : i)
-				retstat = EXIT_FAILURE;
+				retstat = RETVAL_NEGATIVE;
 				goto failed;
 			}
 
-			if (_init_sysfs_file(gpiopath, cpupad, &fd, len) == EXIT_FAILURE) {
-				retstat = EXIT_FAILURE;
+			if (_init_sysfs_file(gpiopath, cpupad, &fd, len)) {
+				retstat = RETVAL_NEGATIVE;
 				goto failed;
 			}
 			break;
@@ -694,27 +755,27 @@ int leiodc_pininit(LIBARGDEF_INIT) {
 
 		default:
 			ERROR_LOGGER(sloginvalidmode, libmode)
-			return EXIT_FAILURE;
+			return RETVAL_NEGATIVE;
 		}
 	}
 
 
 	failed:
 	if (fd) {
-		if (_close(&fd, gpioexport, BOOL_CHECK(retstat == EXIT_SUCCESS)) == EXIT_FAILURE)
-			retstat = EXIT_FAILURE;
+		if (_close(&fd, gpioexport, !retstat))
+			retstat = RETVAL_NEGATIVE;
 	}
 	return retstat;
 }
-EXPORT_SYMBOL(leiodc_pininit)
+EXPORT_SYMBOL(leiodc_pin_init)
 
 
 /*
- * Make pin output and set state
- * return failure if failed
+ * Change pin direction to output and set state
+ * Return -1 on error
  * [06/12/2022]
  */
-int leiodc_pinoutstate(LIBARGDEF_PINS) {
+int leiodc_pin_dir_out_state_set(LIBARGDEF_PINS) {
 
 	switch (libmode) {
 	case mode_cdev:
@@ -727,17 +788,17 @@ int leiodc_pinoutstate(LIBARGDEF_PINS) {
 		ERROR_LOGGER(sloginvalidmode, libmode)
 		break;
 	}
-	return EXIT_FAILURE;
+	return RETVAL_NEGATIVE;
 }
-EXPORT_SYMBOL(leiodc_pinoutstate)
+EXPORT_SYMBOL(leiodc_pin_dir_out_state_set)
 
 
 /*
  * Set state of the specified pin
- * return failure if failed
+ * Return -1 on error
  * [06/03/2015]
  */
-int leiodc_pinstate(LIBARGDEF_PINS) {
+int leiodc_pin_state_set(LIBARGDEF_PINS) {
 
 	switch (libmode) {
 	case mode_cdev:
@@ -750,17 +811,58 @@ int leiodc_pinstate(LIBARGDEF_PINS) {
 		ERROR_LOGGER(sloginvalidmode, libmode)
 		break;
 	}
-	return EXIT_FAILURE;
+	return RETVAL_NEGATIVE;
 }
-EXPORT_SYMBOL(leiodc_pinstate)
+EXPORT_SYMBOL(leiodc_pin_state_set)
 
 
 /*
- * Make pin input
- * return failure if failed
+ * Get direction of the pin
+ * Return -1 on error
+ * [12/02/2024]
+ */
+int leiodc_pin_state_get(LIBARGDEF_PINS) {
+	int		pinstate = RETVAL_NEGATIVE;
+	struct handle_s *handle;
+	struct gpio_v2_line_values linevals;
+
+
+	switch (libmode) {
+	case mode_cdev:
+		if ((handle = _cdev_pin_handle_find(lepin, 1)) == NULL)
+			goto failed;
+
+		memset(&linevals, 0, sizeof(linevals));
+		linevals.mask = 1 << (lepin - handle->minp);
+
+		if (_cdev_line_get_ioctl(handle, &linevals))
+			goto failed;
+
+		pinstate = BOOL_CHECK(linevals.bits & (1 << (lepin - handle->minp)));
+		break;
+
+	case mode_sysfs:
+		// TODO this action can be implemented
+		ERROR_LOGGER(slognogpiochip, "get pin state")
+		break;
+
+	default:
+		ERROR_LOGGER(sloginvalidmode, libmode)
+		break;
+	}
+
+	failed:
+	return pinstate;
+}
+EXPORT_SYMBOL(leiodc_pin_state_get)
+
+
+/*
+ * Change pin direction to input
+ * Return -1 on error
  * [06/12/2022]
  */
-int leiodc_pininput(LIBARGDEF_PINS) {
+int leiodc_pin_dir_in_set(LIBARGDEF_PINS) {
 
 	switch (libmode) {
 	case mode_cdev:
@@ -773,19 +875,19 @@ int leiodc_pininput(LIBARGDEF_PINS) {
 		ERROR_LOGGER(sloginvalidmode, libmode)
 		break;
 	}
-	return EXIT_FAILURE;
+	return RETVAL_NEGATIVE;
 }
-EXPORT_SYMBOL(leiodc_pininput)
+EXPORT_SYMBOL(leiodc_pin_dir_in_set)
 
 
 /*
  * Set interface mode of the UART
- * return failure if failed
+ * Return -1 on error
  * [14/04/2015]
  * Pin table created
  * [26/12/2022]
  */
-int leiodc_uartint(LIBARGDEF_UART) {
+int leiodc_uart_int(LIBARGDEF_UART) {
 	int i;
 	 struct serial_rs485 rs485conf;
 	__u32 pbit, pinmask = 0, valmask = 0;
@@ -795,12 +897,12 @@ int leiodc_uartint(LIBARGDEF_UART) {
 
 	if ((uartno > 2) || (interface >= ARRAY_SIZE(UartoeTable))) {
 		//ERROR_LOGGER("UART number '%u' is to high, must be between 0...2", uartno)
-		return EXIT_SUCCESS;		// Don't do anything if UART number argument is greater than 2
+		return RETVAL_OK;		// Don't do anything if UART number argument is greater than 2
 	}
 
 	if (!libmode) {
-		if (_lib_mode() == EXIT_FAILURE)
-			return EXIT_FAILURE;
+		if (_lib_mode())
+			return RETVAL_NEGATIVE;
 	}
 
 
@@ -809,22 +911,23 @@ int leiodc_uartint(LIBARGDEF_UART) {
 		if (!glrhandles[handle_uart].fd) {
 			/*
 			 * One pin is sufficient to initialize UART GPIOs
+			 * because all pins are in Bank1
 			 */
 			const leiodcpin pintable[] = {lepin_COM1_RS232};
 
-			if (leiodc_pininit(pintable, ARRAY_SIZE(pintable)) == EXIT_FAILURE)
-				return EXIT_FAILURE;
+			if (leiodc_pin_init(pintable, ARRAY_SIZE(pintable)))
+				return RETVAL_NEGATIVE;
 		}
 		break;
 
 	case mode_sysfs:
-		if (leiodc_pininit(NULL, lepin_count) == EXIT_FAILURE)
-			return EXIT_FAILURE;
+		if (leiodc_pin_init(NULL, lepin_count))
+			return RETVAL_NEGATIVE;
 		break;
 
 	default:
 		ERROR_LOGGER(sloginvalidmode, libmode)
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	}
 
 
@@ -838,21 +941,21 @@ int leiodc_uartint(LIBARGDEF_UART) {
 			break;
 
 		case mode_sysfs:
-			if (leiodc_pinoutstate(UartpinTable[uartno].lepin[i],
-					UartoeTable[interface].value[i]) == EXIT_FAILURE)
-				return EXIT_FAILURE;
+			if (leiodc_pin_dir_out_state_set(UartpinTable[uartno].lepin[i],
+					UartoeTable[interface].value[i]))
+				return RETVAL_NEGATIVE;
 			break;
 
 		default:
 			ERROR_LOGGER(sloginvalidmode, libmode)
-			return EXIT_FAILURE;
+			return RETVAL_NEGATIVE;
 		}
 	}
 
 
 	if (libmode == mode_cdev) {
-		if (_cdev_line_ioctl(&glrhandles[handle_uart], pinmask, valmask, GPIO_V2_LINE_FLAG_OUTPUT) == EXIT_FAILURE)
-			return EXIT_FAILURE;
+		if (_cdev_line_set_ioctl(&glrhandles[handle_uart], pinmask, valmask, GPIO_V2_LINE_FLAG_OUTPUT))
+			return RETVAL_NEGATIVE;
 	}
 
 
@@ -896,29 +999,171 @@ int leiodc_uartint(LIBARGDEF_UART) {
 		if (ioctl(*fdptr, TIOCSRS485, &rs485conf)) {
 			ERROR_STD_LOGGER( "UART ioctl(%u, %s, rs485.flags=0x%x rs485.padding[0]=%u)",
 					*fdptr, STRINGIFY_(TIOCSRS485), rs485conf.flags, rs485conf.padding[0])
-			return EXIT_FAILURE;
+			return RETVAL_NEGATIVE;
 		}
 	}
-	return EXIT_SUCCESS;
+	return RETVAL_OK;
 }
-EXPORT_SYMBOL(leiodc_uartint)
+EXPORT_SYMBOL(leiodc_uart_int)
+
+
+/*
+ * Initialize M.2 card pins
+ * Return -1 on error
+ * [26/01/2024]
+ */
+int leiodc_m2_init(void) {
+
+	if (!libmode) {
+		if (_lib_mode())
+			goto failed;
+	}
+
+	switch (libmode) {
+	case mode_cdev:
+		/*
+		 * One pin is sufficient to initialize M.2 GPIOs
+		 * because all pins are in Bank3
+		 */
+		const leiodcpin pintable[] = {lepin_modem_power};
+
+		if (leiodc_pin_init(pintable, ARRAY_SIZE(pintable)))
+			goto failed;
+		break;
+
+	case mode_sysfs:
+		ERROR_LOGGER(slognogpiochip, "initialize M.2 card")
+		goto failed;
+
+	default:
+		ERROR_LOGGER(sloginvalidmode, libmode)
+		goto failed;
+	}
+	return RETVAL_OK;
+
+
+	failed:
+	return RETVAL_NEGATIVE;
+}
+EXPORT_SYMBOL(leiodc_m2_init)
+
+
+/*
+ * Read M.2 card config (as byte)
+ * Return -1 if can't read config
+ * [26/01/2024]
+ */
+int leiodc_m2_config_get(void) {
+	struct gpio_v2_line_values linevals;
+	int		cfgbyte = RETVAL_NEGATIVE;
+
+
+	if (!libmode) {
+		if (_lib_mode())
+			goto failed;
+	}
+
+	switch (libmode) {
+	case mode_cdev:
+		memset(&linevals, 0, sizeof(linevals));
+		linevals.mask = 0x0F << (lepin_M2_cfg0 - glrhandles[handle_modem].minp);
+
+		if (_cdev_line_get_ioctl(&glrhandles[handle_modem], &linevals))
+			goto failed;
+
+		cfgbyte = linevals.bits >> (lepin_M2_cfg0 - glrhandles[handle_modem].minp);
+		break;
+
+	case mode_sysfs:
+		ERROR_LOGGER(slognogpiochip, "read M.2 config")
+		goto failed;
+
+	default:
+		ERROR_LOGGER(sloginvalidmode, libmode)
+		goto failed;
+	}
+
+
+	failed:
+	return cfgbyte;
+}
+EXPORT_SYMBOL(leiodc_m2_config_get)
+
+
+/*
+ * Read MB board version (as byte)
+ * Return -1 if can't read version
+ * [09/02/2024]
+ */
+int leiodc_board_ver_get(void) {
+	struct gpio_v2_line_values linevals;
+	struct handle_s bvhandle;
+	int				verbyte = RETVAL_NEGATIVE;
+	lechar			gpiopath[GPIO_PATH_LENGTH];
+	size_t			len;
+
+
+	if (!libmode) {
+		if (_lib_mode())
+			goto failed;
+	}
+
+	switch (libmode) {
+	case mode_cdev:
+		len = strlen(GPIO_CDEV_CHIP);
+		strcpy(gpiopath, GPIO_CDEV_CHIP);
+
+		memset(&bvhandle, 0, sizeof(bvhandle));
+		bvhandle.minp = lepin_board_ver0;
+		bvhandle.maxp = lepin_board_ver3;
+		bvhandle.name = "boardver-gpio";
+
+		if (_init_cdev_chip(gpiopath, &bvhandle, len))
+			goto failed;
+
+
+		memset(&linevals, 0, sizeof(linevals));
+		linevals.mask = 0x0F;
+
+		if (_cdev_line_get_ioctl(&bvhandle, &linevals))
+			goto failed;
+
+		verbyte = linevals.bits;
+
+		_close(&bvhandle.fd, bvhandle.name, 1);
+		break;
+
+	case mode_sysfs:
+		ERROR_LOGGER(slognogpiochip, "read board version")
+		goto failed;
+
+	default:
+		ERROR_LOGGER(sloginvalidmode, libmode)
+		goto failed;
+	}
+
+
+	failed:
+	return verbyte;
+}
+EXPORT_SYMBOL(leiodc_board_ver_get)
 
 
 /*
  * Check library version
- * return failure if initialization failed
+ * Return -1 if library version is too old
  * [11/03/2015]
-*/
+ */
 int leiodc_libverchk(LIBARGDEF_VERCHK) {
 	float fval = minvers;
 
 
 	if (minvers > ((LIBVERSION_MAJOR * 100) + LIBVERSION_MINOR)) {
 		fval /= 100;
-		ERROR_LOGGER("libleiodc.so library version %u.%02u is too old, version %.2f or newer is required.",
+		ERROR_LOGGER("Existing libleiodc.so library V%u.%02u is too old, version %.2f or newer is required.",
 				LIBVERSION_MAJOR, LIBVERSION_MINOR, fval);
-		return EXIT_FAILURE;
+		return RETVAL_NEGATIVE;
 	}
-	return EXIT_SUCCESS;
+	return RETVAL_OK;
 }
 EXPORT_SYMBOL(leiodc_libverchk)

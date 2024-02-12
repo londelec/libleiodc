@@ -1,0 +1,10 @@
+.*
+*.o
+*.d
+!.gitignore
+builddate.txt
+createbuilddate*
+libleiodc.so*
+/Debug
+
+/imx28/

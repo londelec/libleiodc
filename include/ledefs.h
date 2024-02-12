@@ -2,11 +2,17 @@
  ============================================================================
  Name        : ledefs.h
  Author      : AK
- Version     : V1.18
+ Version     : V1.20
  Copyright   : Property of Londelec UK Ltd
  Description : Global header file for Londelec C/C++ projects
 
   Change log :
+
+  *********V1.20 04/02/2024**************
+  NAN floating point value defined
+
+  *********V1.19 10/02/2023**************
+  Positive and negative infinity defined
 
   *********V1.18 16/09/2019**************
   Pointer container structure created
@@ -94,40 +100,56 @@
 #endif
 
 
-// Generic definitions
+/* Generic definitions */
 #define HOURINSEC						3600			// Hour in seconds
 #define MININSEC						60				// Minute in seconds
 #define DAYINSEC						86400			// Day in seconds
 #define SECINNSEC						1000000000		// Second in nanoseconds
 #define MSECINNSEC						1000000			// Milisecond in nanoseconds
 
-// Function return status
+/* Function return status */
 #define LE_OK 							0
 #define LE_FAIL 						1
 
-// Boolean
+/* Boolean */
 #define LE_FALSE						0
 #define LE_TRUE							1
 
+/* Math */
+#ifdef MOXA_W3X5A
+#define LE_PINF							(__extension__ 0x1.0p255f)	// Positive float infinity
+#else
+#define LE_PINF							INFINITY
+#define LE_NAN							NAN
+#endif
+#define LE_NINF							-LE_PINF
 
-// Force compiler to use min number of bytes for
-// structure or enum members
+/* Float/Integer conversions work both ways to and from Integer */
+#define FLOAT_UINT32(mval)				 (uint32_t) ((mval))
+#define FLOAT_INT32(mval)				 (int32_t) ((mval))
+#define FLOAT_INT16(mval)				 (int16_t) ((mval))
+#define FLOAT_FROM_UINT16(mval)			 (uint16_t) ((mval))
+#define FLOAT_TO_UINT16(mval)			 (((mval) >= 0) ? (((mval) > UINT16_MAX) ? UINT16_MAX : (uint16_t) (mval)) : 0)
+
+
+/* Compiler attributes */
 #define LEHWPACK					__attribute__ ((packed))	// Pack hardware structures, mandatory
 #if defined MOXA_W3X5A | defined IMX287
 #define LEOPACK													// Don't pack structures where packing is optional
 #else
 #define LEOPACK						__attribute__ ((packed))	// Pack in order to save memory, optional
-#endif // MOXA W3X5A
+#endif
 #define LEALIGN4					__attribute__ ((aligned (4)))	// Minimum alignment 4 bytes
 #define LEWEAK						__attribute__ ((weak))			// Function initialized as weak, normally replaced by driver
 #define LELIBCONSTRUCTOR			__attribute__ ((constructor))	// Library initialization constructor, executed before library loads
 
 
-// This is normally defined in 'bits/time.h',
-// but the header is not getting indexed properly due to an Eclipse bug.
-// Delete this definition if different IDE indexes 'bits/time.h'
-// correctly and throws redefinition error
-/* Monotonic system-wide clock.  */
+/*
+ * This is normally defined in 'bits/time.h',
+ * but the header is not getting indexed properly due to an Eclipse bug.
+ * Delete this definition if different IDE indexes 'bits/time.h'
+ * correctly and throws redefinition error
+ */
 #ifdef MOXA_W3X5A
 #define CLOCK_MONOTONIC					0		// Moxa's W325A kernel doesn't have Monotonic clock
 #else
@@ -137,9 +159,7 @@
 #endif
 
 
-
-
-// Generic definitions
+/* Generic types */
 typedef	struct sigaction			sigaction_t;		// Signal action structure
 typedef	struct termios				termios_t;			// Terminal structure
 typedef	int							sockflags_t;		// Socket flags size definition
@@ -198,19 +218,19 @@ typedef struct tm					localtime_t;		// Local time structure definition
 typedef struct timespec				nanotime_t;			// Nanosecond time structure for Monotonic clock
 
 
-// Application specific definitions
+/* Application specific definitions */
 typedef	uint8_t						leflags8_t;			// Internal flag size definition
 typedef	uint16_t					leflags16_t;		// Internal flag size definition
 
 
-// Constant string container
+/* Constant string container */
 typedef struct sbuff_s {
 	lechar 					*buf;
 	uint32_t 				size;
 } sbuff_t;
 
 
-// Dynamic string container
+/* Dynamic string container */
 typedef struct scont_s {
 	lechar					*buf;
 	lechar					*tail;
@@ -218,14 +238,14 @@ typedef struct scont_s {
 } scont_t;
 
 
-// Pointer container
+/* Pointer container */
 typedef struct ptrcont_s {
 	void 					**buf;
 	uint32_t 				size;
 } ptrcont_t;
 
 
-// Unsigned integer container
+/* Unsigned integer container */
 typedef struct u32buff_s {
 	uint8_t 				*buf;
 	uint8_t					*head;
@@ -233,7 +253,7 @@ typedef struct u32buff_s {
 } u32buff_t;
 
 
-// Generic Macros
+/* Generic Macros */
 #define STRINGIFY_(s) 				#s
 #define STRINGIFY(s)				STRINGIFY_(s)
 #ifndef ARRAY_SIZE
@@ -245,7 +265,7 @@ typedef struct u32buff_s {
 
 #define BYTE_ISNUM(mbyte) 			(((mbyte) >= 0x30) && ((mbyte) <= 0x39))
 #define BYTE_ISCRLF(mbyte) 			(((mbyte) == '\r') || ((mbyte) == '\n'))
-// Convert ASCII to decimal
+/* Convert ASCII to decimal */
 #define ASCIIDEC_MACRO(mdec, mascii)\
 		mdec *= 10;\
 		mdec += (mascii & 0x0F);
@@ -274,6 +294,9 @@ typedef struct u32buff_s {
 		if ((mnum) < ((msize) - 1))\
 			memmove(&mptr[(mnum)], &mptr[(mnum) + 1], ((msize) - (mnum) - 1) * sizeof(*(mptr)));\
 		(msize)--;
+
+#define TABLE_LAST_ENTRY(mtab)\
+		(mtab).table[(mtab).size - 1]
 
 
 /*// Macros for expanding the date string

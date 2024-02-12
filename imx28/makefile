@@ -27,7 +27,7 @@ $(wildcard ../makefile.targets) \
 
 
 BUILD_ARTIFACT_NAME := libleiodc
-BUILD_ARTIFACT_EXTENSION := so.2.0.0
+BUILD_ARTIFACT_EXTENSION := so.3.0.0
 BUILD_ARTIFACT_PREFIX :=
 BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME)$(if $(BUILD_ARTIFACT_EXTENSION),.$(BUILD_ARTIFACT_EXTENSION),)
 
@@ -35,28 +35,32 @@ BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME)$(if $(BUILD_ART
 
 # All Target
 all:
-	+@$(MAKE) --no-print-directory pre-build && $(MAKE) --no-print-directory main-build
+	+@$(MAKE) --no-print-directory pre-build && $(MAKE) --no-print-directory main-build && $(MAKE) --no-print-directory post-build
 
 # Main-build Target
-main-build: libleiodc.so.2.0.0
+main-build: libleiodc.so.3.0.0
 
 # Tool invocations
-libleiodc.so.2.0.0: $(OBJS) $(USER_OBJS) makefile objects.mk $(OPTIONAL_TOOL_DEPS)
+libleiodc.so.3.0.0: $(OBJS) $(USER_OBJS) makefile objects.mk $(OPTIONAL_TOOL_DEPS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: Cross GCC Linker'
-	arm-br2-linux-gnueabi-gcc -shared -o "libleiodc.so.2.0.0" $(OBJS) $(USER_OBJS) $(LIBS)
+	arm-br2-linux-gnueabi-gcc -shared -Wl,-soname=libleiodc.so.3 -o "libleiodc.so.3.0.0" $(OBJS) $(USER_OBJS) $(LIBS)
 	@echo 'Finished building target: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(RM) $(LIBRARIES)$(OBJS)$(C_DEPS) libleiodc.so.2.0.0
+	-$(RM) $(LIBRARIES)$(OBJS)$(C_DEPS) libleiodc.so.3.0.0
 	-@echo ' '
 
 pre-build:
 	-./createbuilddate.sh "../include/builddate.txt" "const char *LibraryDate" "LibraryDate"
 	-@echo ' '
 
-.PHONY: all clean dependents main-build pre-build
+post-build:
+	-ln -sf libleiodc.so.3.0.0  libleiodc.so.3
+	-@echo ' '
+
+.PHONY: all clean dependents main-build pre-build post-build
 
 -include ../makefile.targets
